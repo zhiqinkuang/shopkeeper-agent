@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+.env.*
+!.env.example
+
+# Runtime logs
+logs/*
+!logs/.gitkeep
+
+# Local embedding model (download before docker compose up)
+docker/embedding/bge-large-zh-v1.5/

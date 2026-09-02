@@ -1,0 +1,30 @@
+[project]
+name = "shopkeeper-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "asyncmy>=0.2.14",
+    "cryptography>=50.0.1",
+    "elasticsearch[async]>=8,<9",
+    "fastapi[standard]>=0.141.1",
+    "greenlet>=3.5.5",
+    "huggingface-hub>=1.29.0",
+    "jieba>=0.42.1",
+    "langchain>=1.3.18",
+    "langchain-deepseek>=1.1.0",
+    "langchain-huggingface>=1.2.2",
+    "langchain-openai>=1.6.0",
+    "langgraph>=1.2.11",
+    "loguru>=0.7.3",
+    "omegaconf>=2.3.1",
+    "python-dotenv>=1.2.3",
+    "pyyaml>=6.0.3",
+    "qdrant-client==1.16.2",
+    "sqlalchemy>=2.0.52",
+]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

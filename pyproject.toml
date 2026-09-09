@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "asyncmy>=0.2.14",
     "cryptography>=50.0.1",
-    "elasticsearch[async]>=8,<9",
+    "elasticsearch[async]>=8,<10",
     "fastapi[standard]>=0.141.1",
     "greenlet>=3.5.5",
     "huggingface-hub>=1.29.0",

@@ -1,0 +1,64 @@
+services:
+  mysql-test:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: test-root-password
+      MYSQL_USER: didilili
+      MYSQL_PASSWORD: test-password
+    ports:
+      - "13307:3306"
+    volumes:
+      - mysql_test_data:/var/lib/mysql
+      - ./mysql:/docker-entrypoint-initdb.d:ro
+    command: --character-set-server=utf8mb4
+      --collation-server=utf8mb4_general_ci
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - localhost
+        - -ptest-root-password
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  elasticsearch-test:
+    build: ./elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "19200:9200"
+    mem_limit: 1g
+    volumes:
+      - es_test_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://localhost:9200/_cluster/health
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  qdrant-test:
+    image: qdrant/qdrant:v1.16.3
+    ports:
+      - "16333:6333"
+      - "16334:6334"
+    volumes:
+      - qdrant_test_data:/qdrant/storage
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - bash -c ':> /dev/tcp/127.0.0.1/6333'
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  mysql_test_data:
+  es_test_data:
+  qdrant_test_data:

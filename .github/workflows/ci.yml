@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -29,10 +30,126 @@ jobs:
           enable-cache: true
 
       - name: 安装依赖
-        run: uv sync --locked
+        run: uv sync --locked --group dev
 
       - name: 静态检查
-        run: uvx ruff check --select E4,E7,E9,F .
+        run: uv run ruff check app tests
 
       - name: 编译检查
         run: uv run python -m compileall -q app main.py
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: 安装依赖
+        run: uv sync --locked --group dev
+
+      - name: 单元测试与覆盖率
+        run: >
+          uv run pytest tests/unit
+          --cov=app --cov-branch
+          --cov-report=term-missing
+          --cov-report=xml
+
+      - name: 上传单元测试覆盖率
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage
+          path: coverage.xml
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: 安装依赖
+        run: uv sync --locked --group dev
+
+      - name: 启动隔离联调服务
+        working-directory: docker
+        run: >
+          docker compose -p shopkeeper-agent-test
+          -f docker-compose.test.yml up -d --build --wait
+
+      - name: 全量测试与覆盖率
+        run: >
+          uv run pytest tests/unit tests/integration
+          --cov=app --cov-branch
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-report=html
+
+      - name: 核心构建模块覆盖率门禁
+        run: >
+          uv run coverage report
+          --include='app/services/meta_knowledge_service.py,app/repositories/*/*.py,app/repositories/mysql/*/*.py,app/scripts/build_meta_knowledge.py,app/clients/*.py'
+          --fail-under=90
+
+      - name: 上传全量覆盖率
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-coverage
+          path: |
+            coverage.xml
+            htmlcov
+
+      - name: 输出联调服务日志
+        if: failure()
+        working-directory: docker
+        run: >
+          docker compose -p shopkeeper-agent-test
+          -f docker-compose.test.yml logs --no-color
+
+      - name: 清理隔离联调服务
+        if: always()
+        working-directory: docker
+        run: >
+          docker compose -p shopkeeper-agent-test
+          -f docker-compose.test.yml down -v --remove-orphans
+
+  real-embedding:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+      RUN_REAL_EMBEDDING: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: 安装依赖
+        run: uv sync --locked --group dev
+
+      - name: 校验真实 Embedding 密钥
+        run: test -n "$EMBEDDING_API_KEY"
+
+      - name: 真实 Embedding 冒烟测试
+        run: uv run pytest tests/external -m external -q

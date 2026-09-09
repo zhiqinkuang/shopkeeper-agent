@@ -16,5 +16,10 @@ wheels/
 logs/*
 !logs/.gitkeep
 
+# 测试覆盖率报告
+.coverage
+coverage.xml
+htmlcov/
+
 # Local embedding model (download before docker compose up)
 docker/embedding/bge-large-zh-v1.5/

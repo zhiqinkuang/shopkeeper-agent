@@ -8,7 +8,7 @@
 """
 
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import Distance, PointStruct, UpdateStatus, VectorParams
 
 from app.conf.app_config import app_config
 from app.entities.metric_info import MetricInfo
@@ -19,39 +19,89 @@ class MetricQdrantRepository:
 
     collection_name = "metric_info_collection"
 
-    def __init__(self, client: AsyncQdrantClient):
+    def __init__(
+        self,
+        client: AsyncQdrantClient,
+        collection_name: str | None = None,
+    ):
         self.client = client
+        self.collection_name = collection_name or type(self).collection_name
 
-    async def recreate_collection(self):
-        """重建指标向量集合，避免混用不同模型生成的向量"""
-        if await self.client.collection_exists(self.collection_name):
-            await self.client.delete_collection(self.collection_name)
-        await self.client.create_collection(
-            collection_name=self.collection_name,
-            vectors_config=VectorParams(
-                # 向量维度必须和 Embedding 模型输出一致，否则写入时会失败
-                size=app_config.qdrant.embedding_size,
-                distance=Distance.COSINE,
-            ),
-        )
+    async def ensure_collection(self):
+        """确保指标向量集合存在，并校验现有集合配置"""
+        expected_size = app_config.qdrant.embedding_size
+        expected_distance = Distance.COSINE
 
-    async def upsert(
+        if not await self.client.collection_exists(self.collection_name):
+            await self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(
+                    size=expected_size,
+                    distance=expected_distance,
+                ),
+            )
+            return
+
+        collection = await self.client.get_collection(self.collection_name)
+        vectors_config = collection.config.params.vectors
+        if not isinstance(vectors_config, VectorParams):
+            raise ValueError("指标向量集合必须使用单向量配置")
+        if (
+            vectors_config.size != expected_size
+            or vectors_config.distance != expected_distance
+        ):
+            raise ValueError(
+                "指标向量集合配置不匹配: "
+                f"期望 size={expected_size}, distance={expected_distance}; "
+                f"实际 size={vectors_config.size}, distance={vectors_config.distance}"
+            )
+
+    async def sync(
         self,
         ids: list[str],
         embeddings: list[list[float]],
         payloads: list[dict],
         batch_size: int = 10,
     ):
-        """分批 upsert 指标向量点，避免一次提交过多 point"""
-        # ids embeddings payloads 三个列表按相同下标组成一条完整的 Qdrant point
+        """写入当前指标向量点，并删除本次构建中已经不存在的 point"""
+        if not (len(ids) == len(embeddings) == len(payloads)):
+            raise ValueError("指标向量的 id、embedding 和 payload 数量必须一致")
+
         points: list[PointStruct] = [
             PointStruct(id=id, vector=embedding, payload=payload)
             for id, embedding, payload in zip(ids, embeddings, payloads)
         ]
         for i in range(0, len(points), batch_size):
-            await self.client.upsert(
+            result = await self.client.upsert(
                 collection_name=self.collection_name, points=points[i : i + batch_size]
             )
+            if result.status != UpdateStatus.COMPLETED:
+                raise RuntimeError(f"指标向量写入未完成: {result.status}")
+
+        expected_ids = set(ids)
+        stale_ids: list[int | str] = []
+        offset = None
+        while True:
+            records, offset = await self.client.scroll(
+                collection_name=self.collection_name,
+                limit=256,
+                offset=offset,
+                with_payload=False,
+                with_vectors=False,
+            )
+            stale_ids.extend(
+                record.id for record in records if str(record.id) not in expected_ids
+            )
+            if offset is None:
+                break
+
+        for i in range(0, len(stale_ids), batch_size):
+            result = await self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=stale_ids[i : i + batch_size],
+            )
+            if result.status != UpdateStatus.COMPLETED:
+                raise RuntimeError(f"陈旧指标向量删除未完成: {result.status}")
 
     async def search(
         self, embedding: list[float], score_threshold: float = 0.6, limit: int = 20

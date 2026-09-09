@@ -26,3 +26,4 @@ class MetricInfoMySQL(Base):
         JSON, comment="关联字段"
     )
     alias: Mapped[dict | list | None] = mapped_column(JSON, comment="指标别名")
+    formula: Mapped[str] = mapped_column(Text, comment="指标计算公式")

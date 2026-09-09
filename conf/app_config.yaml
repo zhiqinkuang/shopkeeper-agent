@@ -24,8 +24,8 @@ db_dw:
   database: ${oc.env:DB_DW_DATABASE,dw}
 
 qdrant:
-  host: localhost
-  port: 6333
+  host: ${oc.env:QDRANT_HOST,localhost}
+  port: ${oc.env:QDRANT_PORT,6333}
   embedding_size: 1024
 
 embedding:
@@ -34,9 +34,9 @@ embedding:
   api_key: ${oc.env:EMBEDDING_API_KEY}
 
 es:
-  host: localhost
-  port: 9200
-  index_name: data_agent
+  host: ${oc.env:ES_HOST,localhost}
+  port: ${oc.env:ES_PORT,9200}
+  index_name: ${oc.env:ES_INDEX_NAME,data_agent}
 
 llm:
   model_name: deepseek-v4-flash

@@ -39,6 +39,7 @@ class MetricConfig:
     description: str
     relevant_columns: list[str]
     alias: list[str]
+    formula: str
 
 
 # 元数据知识构建总配置

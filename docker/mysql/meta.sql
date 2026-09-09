@@ -35,7 +35,8 @@ CREATE TABLE metric_info
     name             VARCHAR(128) COMMENT '指标名称',
     description      TEXT COMMENT '指标描述',
     relevant_columns JSON COMMENT '关联的列',
-    alias            JSON COMMENT '指标别名'
+    alias            JSON COMMENT '指标别名',
+    formula          TEXT NOT NULL COMMENT '指标计算公式'
 );
 
 

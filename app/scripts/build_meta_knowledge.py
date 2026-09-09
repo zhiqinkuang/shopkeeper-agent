@@ -17,6 +17,7 @@ from app.clients.mysql_client_manager import (
     meta_mysql_client_manager,
 )
 from app.clients.qdrant_client_manager import qdrant_client_manager
+from app.core.log import logger
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
@@ -26,18 +27,24 @@ from app.services.meta_knowledge_service import MetaKnowledgeService
 
 
 async def build(config_path: Path):
+    if not config_path.is_file():
+        raise FileNotFoundError(f"元数据配置文件不存在: {config_path}")
+
     # 1. 初始化构建流程依赖的全部客户端
-    meta_mysql_client_manager.init()
-    dw_mysql_client_manager.init()
-    qdrant_client_manager.init()
-    es_client_manager.init()
-    embedding_client_manager.init()
-
-    assert qdrant_client_manager.client is not None
-    assert es_client_manager.client is not None
-    assert embedding_client_manager.client is not None
-
+    build_failed = False
     try:
+        meta_mysql_client_manager.init()
+        dw_mysql_client_manager.init()
+        qdrant_client_manager.init()
+        es_client_manager.init()
+        embedding_client_manager.init()
+
+        assert meta_mysql_client_manager.session_factory is not None
+        assert dw_mysql_client_manager.session_factory is not None
+        assert qdrant_client_manager.client is not None
+        assert es_client_manager.client is not None
+        assert embedding_client_manager.client is not None
+
         # 2. 打开两个异步 Session，分别供两个 MySQL repository 使用
         async with (
             meta_mysql_client_manager.session_factory() as meta_session,
@@ -66,21 +73,45 @@ async def build(config_path: Path):
 
             # 5. 真正进入服务层的构建逻辑
             await meta_knowledge_service.build(config_path)
+    except BaseException:
+        build_failed = True
+        raise
     finally:
         # 6. 无论构建成功或失败都关闭外部连接
-        await meta_mysql_client_manager.close()
-        await dw_mysql_client_manager.close()
-        await qdrant_client_manager.close()
-        await es_client_manager.close()
+        close_tasks = []
+        if meta_mysql_client_manager.engine is not None:
+            close_tasks.append(meta_mysql_client_manager.close())
+        if dw_mysql_client_manager.engine is not None:
+            close_tasks.append(dw_mysql_client_manager.close())
+        if qdrant_client_manager.client is not None:
+            close_tasks.append(qdrant_client_manager.close())
+        if es_client_manager.client is not None:
+            close_tasks.append(es_client_manager.close())
+        if (
+            embedding_client_manager.client is not None
+            or embedding_client_manager.http_client is not None
+            or embedding_client_manager.http_async_client is not None
+        ):
+            close_tasks.append(embedding_client_manager.close())
+
+        close_results = await asyncio.gather(*close_tasks, return_exceptions=True)
+        close_errors = [
+            result for result in close_results if isinstance(result, Exception)
+        ]
+        if close_errors:
+            if build_failed:
+                logger.error(f"构建失败后关闭资源时发生异常: {close_errors}")
+            else:
+                raise ExceptionGroup("关闭构建资源失败", close_errors)
 
 
 if __name__ == "__main__":
     # 7. 解析命令行参数
     #    由外部决定本次构建使用哪份配置文件
     parser = argparse.ArgumentParser()
-    parser.add_argument("-c", "--conf")
+    parser.add_argument("-c", "--conf", required=True, type=Path)
     args = parser.parse_args()
 
     # 8. 将字符串路径转成 Path
     #    再启动异步 build
-    asyncio.run(build(Path(args.conf)))
+    asyncio.run(build(args.conf.resolve()))

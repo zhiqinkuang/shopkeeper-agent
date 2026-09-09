@@ -23,6 +23,7 @@ class MetricInfoMapper:
             description=model.description,
             relevant_columns=model.relevant_columns,
             alias=model.alias,
+            formula=model.formula,
         )
 
     @staticmethod

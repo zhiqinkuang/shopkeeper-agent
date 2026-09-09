@@ -39,6 +39,7 @@ class DWMySQLRepository:
             SELECT DISTINCT `{quoted_column}`
             FROM `{quoted_table}`
             WHERE `{quoted_column}` IS NOT NULL
+            ORDER BY `{quoted_column}`
             LIMIT {int(limit)}
             """
         )

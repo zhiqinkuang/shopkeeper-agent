@@ -8,11 +8,16 @@ from app.conf.app_config import QdrantConfig, app_config
 
 
 class QdrantClientManager:
-    def __init__(self, qdrant_config: QdrantConfig):
+    def __init__(
+        self,
+        qdrant_config: QdrantConfig,
+        check_compatibility: bool = True,
+    ):
         # 保存配置对象，后面初始化客户端时要从这里读取 host 和 port
         self.qdrant_config = qdrant_config
         # 先把 client 声明出来，真正初始化放到 init() 中进行
         self.client: Optional[AsyncQdrantClient] = None
+        self.check_compatibility = check_compatibility
 
     def _get_url(self):
         # 根据配置文件拼出 Qdrant 服务地址
@@ -21,7 +26,12 @@ class QdrantClientManager:
     def init(self):
         # 创建异步客户端
         # 这里不在 __init__ 中直接初始化，是为了和项目的生命周期管理保持一致
-        self.client = AsyncQdrantClient(url=self._get_url())
+        # Qdrant 是基础设施直连服务，不应经过操作系统中的 HTTP 代理
+        self.client = AsyncQdrantClient(
+            url=self._get_url(),
+            trust_env=False,
+            check_compatibility=self.check_compatibility,
+        )
 
     async def close(self):
         # 项目关闭时统一关闭客户端连接

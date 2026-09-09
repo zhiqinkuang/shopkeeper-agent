@@ -1,6 +1,7 @@
 import asyncio
 from typing import Optional
 
+import httpx
 from langchain_openai import OpenAIEmbeddings
 
 from app.conf.app_config import EmbeddingConfig, app_config
@@ -12,18 +13,34 @@ class EmbeddingClientManager:
         self.client: Optional[OpenAIEmbeddings] = None
         # 保存 Embedding 服务配置，供 init() 时组装服务访问地址使用
         self.config = config
+        self.http_client: Optional[httpx.Client] = None
+        self.http_async_client: Optional[httpx.AsyncClient] = None
 
     def init(self):
         # 百炼兼容 OpenAI Embedding 协议，连接参数统一从应用配置读取
+        self.http_client = httpx.Client()
+        self.http_async_client = httpx.AsyncClient()
         self.client = OpenAIEmbeddings(
             model=self.config.model,
             api_key=self.config.api_key,
             base_url=self.config.base_url,
+            http_client=self.http_client,
+            http_async_client=self.http_async_client,
             dimensions=app_config.qdrant.embedding_size,
             # text-embedding-v4 单次最多处理 10 条文本
             chunk_size=10,
             check_embedding_ctx_length=False,
         )
+
+    async def close(self):
+        """关闭 Embedding 客户端持有的同步和异步连接池"""
+        if self.http_async_client is not None:
+            await self.http_async_client.aclose()
+            self.http_async_client = None
+        if self.http_client is not None:
+            self.http_client.close()
+            self.http_client = None
+        self.client = None
 
 
 # 模块级单例，供其他模块按需复用同一个客户端管理器

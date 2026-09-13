@@ -28,6 +28,7 @@ const nodes: FlowNode[] = [
   { step: "校验SQL", x: 410, y: 630 },
   { step: "校正SQL", x: 670, y: 630 },
   { step: "执行SQL", x: 410, y: 724 },
+  { step: "生成回答", x: 410, y: 828 },
 ];
 
 const connectors = [
@@ -44,6 +45,7 @@ const connectors = [
   "M410 462 L410 520",
   "M410 566 L410 624",
   "M410 670 L410 718",
+  "M410 764 L410 822",
   "M488 650 L586 650",
   "M670 670 L670 696 L410 696 L410 718",
 ];
@@ -127,10 +129,10 @@ export function StepRail({ steps = [] }: { steps?: StepState[] }) {
       </div>
 
       <div className="overflow-x-auto">
-        <div className="relative mx-auto h-[780px] w-[820px]">
+        <div className="relative mx-auto h-[884px] w-[820px]">
           <svg
             className="pointer-events-none absolute inset-0 h-full w-full"
-            viewBox="0 0 820 780"
+            viewBox="0 0 820 884"
             fill="none"
             aria-hidden="true"
           >

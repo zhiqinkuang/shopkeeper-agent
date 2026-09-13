@@ -9,6 +9,7 @@ from app.agent.context import DataAgentContext
 from app.agent.graph import route_after_validation, wire_sql_loop
 from app.agent.nodes.correct_sql import correct_sql
 from app.agent.nodes.execute_sql import execute_sql
+from app.agent.nodes.generate_answer import generate_answer
 from app.agent.nodes.generate_sql import generate_sql
 from app.agent.nodes.validate_sql import validate_sql
 from app.agent.state import (
@@ -87,6 +88,7 @@ def _sql_loop_graph():
     graph.add_node("validate_sql", validate_sql)
     graph.add_node("correct_sql", correct_sql)
     graph.add_node("execute_sql", execute_sql)
+    graph.add_node("generate_answer", generate_answer)
     graph.add_edge(START, "generate_sql")
     wire_sql_loop(graph)
     return graph.compile()
@@ -100,6 +102,10 @@ async def _run_sql_loop(graph, dw, mocker, generated_sql, corrected_sql=GOOD_SQL
     mocker.patch(
         "app.agent.nodes.correct_sql.llm",
         RunnableLambda(lambda _: corrected_sql),
+    )
+    mocker.patch(
+        "app.agent.nodes.generate_answer.llm",
+        RunnableLambda(lambda _: "华北地区销售总额为 41099.5 元。"),
     )
     events = []
     nodes = []
@@ -131,14 +137,20 @@ async def test_sql_loop_corrects_invalid_sql_then_executes(mocker):
         "correct_sql",
         "validate_sql",
         "execute_sql",
+        "generate_answer",
     ]
     assert dw.validated == [BAD_SQL, GOOD_SQL]
     assert dw.executed == [GOOD_SQL]
     assert merged["sql"] == GOOD_SQL
     assert merged["execution_result"] == [{"gmv": 41099.5}]
+    assert merged["answer"] == "华北地区销售总额为 41099.5 元。"
     assert merged["error"] is None
     assert merged["sql_valid"] is True
     assert {"type": "result", "data": [{"gmv": 41099.5}]} in events
+    assert {
+        "type": "answer",
+        "text": "华北地区销售总额为 41099.5 元。",
+    } in events
     assert {
         "type": "progress",
         "step": "校验SQL",
@@ -157,7 +169,12 @@ async def test_sql_loop_executes_when_first_validate_passes(mocker):
         _sql_loop_graph(), dw, mocker, GOOD_SQL
     )
 
-    assert nodes == ["generate_sql", "validate_sql", "execute_sql"]
+    assert nodes == [
+        "generate_sql",
+        "validate_sql",
+        "execute_sql",
+        "generate_answer",
+    ]
     assert dw.validated == [GOOD_SQL]
     assert dw.executed == [GOOD_SQL]
     assert merged["execution_result"] == [{"gmv": 41099.5}]
@@ -217,6 +234,7 @@ async def test_sql_loop_corrects_markdown_sql_then_executes(mocker):
         "correct_sql",
         "validate_sql",
         "execute_sql",
+        "generate_answer",
     ]
     assert dw.validated == [markdown_sql, GOOD_SQL]
     assert dw.executed == [GOOD_SQL]

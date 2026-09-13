@@ -15,12 +15,17 @@ export type ResultEvent = {
   data: unknown;
 };
 
+export type AnswerEvent = {
+  type: "answer";
+  text: string;
+};
+
 export type ErrorEvent = {
   type: "error";
   message: string;
 };
 
-export type AgentEvent = ProgressEvent | ResultEvent | ErrorEvent;
+export type AgentEvent = ProgressEvent | ResultEvent | AnswerEvent | ErrorEvent;
 
 export type StepState = {
   step: string;

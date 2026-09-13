@@ -48,6 +48,7 @@ def test_load_prompt_reads_filter_table_template():
     assert "{query}" in generate_sql_prompt
     assert "```sql" in generate_sql_prompt
     assert "{error}" in load_prompt("correct_sql")
+    assert "{result}" in load_prompt("generate_answer")
 
 
 async def test_extract_keywords_keeps_query_and_business_terms():

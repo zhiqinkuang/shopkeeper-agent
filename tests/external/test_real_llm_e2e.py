@@ -124,7 +124,8 @@ async def test_real_llm_query_graph_end_to_end():
                     merged.update(node_update)
 
         assert EXPECTED_PROGRESS <= set(progress)
-        assert {"生成SQL", "校验SQL", "执行SQL"} <= set(progress)
+        assert {"生成SQL", "校验SQL", "执行SQL", "生成回答"} <= set(progress)
+        assert merged.get("answer")
 
         keywords = merged.get("keywords") or []
         assert QUESTION in keywords

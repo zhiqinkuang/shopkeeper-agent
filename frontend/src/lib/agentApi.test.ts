@@ -17,6 +17,13 @@ describe("parseSseChunk", () => {
     });
   });
 
+  it("parses answer events", () => {
+    expect(parseSseChunk('data: {"type":"answer","text":"华北地区销售总额为 41099.5 元。"}')).toEqual({
+      type: "answer",
+      text: "华北地区销售总额为 41099.5 元。",
+    });
+  });
+
   it("parses error events", () => {
     expect(parseSseChunk('data: {"type":"error","message":"模拟失败"}')).toEqual({
       type: "error",

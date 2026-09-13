@@ -73,4 +73,5 @@ class DataAgentState(TypedDict, total=False):
     correction_attempts: int
     max_correction_attempts: int
     execution_result: list[dict[str, Any]]
+    answer: str
     error: str | None

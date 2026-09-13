@@ -105,9 +105,16 @@ export default function App() {
           if (event.type === "result") {
             return {
               ...message,
-              status: "done",
               content: summarizeResult(event.data),
               result: event.data,
+            };
+          }
+
+          if (event.type === "answer") {
+            return {
+              ...message,
+              status: "done",
+              content: event.text,
             };
           }
 

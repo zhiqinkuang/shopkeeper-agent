@@ -13,6 +13,7 @@ from app.agent.nodes import (
     extract_keywords,
     filter_metric,
     filter_table,
+    generate_answer,
     generate_sql,
     merge_retrieved_info,
     recall_column,
@@ -52,6 +53,7 @@ def build_query_graph() -> CompiledStateGraph:
     graph.add_node("validate_sql", validate_sql)
     graph.add_node("correct_sql", correct_sql)
     graph.add_node("execute_sql", execute_sql)
+    graph.add_node("generate_answer", generate_answer)
 
     graph.add_edge(START, "extract_keywords")
     graph.add_edge("extract_keywords", "recall_column")
@@ -83,7 +85,8 @@ def wire_sql_loop(graph: StateGraph) -> None:
         },
     )
     graph.add_edge("correct_sql", "validate_sql")
-    graph.add_edge("execute_sql", END)
+    graph.add_edge("execute_sql", "generate_answer")
+    graph.add_edge("generate_answer", END)
 
 
 query_graph = build_query_graph()

@@ -36,6 +36,9 @@ class FakeEmbeddings(Embeddings):
     def embed_query(self, text: str) -> list[float]:
         return self._vector(text)
 
+    async def aembed_query(self, text: str) -> list[float]:
+        return self.embed_query(text)
+
 
 @pytest.fixture
 def minimal_config() -> MetaConfig:

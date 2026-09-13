@@ -1,4 +1,5 @@
 SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
 CREATE DATABASE meta DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 GRANT ALL PRIVILEGES ON meta.* TO 'didilili'@'%';
 
@@ -25,7 +26,9 @@ CREATE TABLE column_info
     examples    JSON COMMENT '数据示例',
     description TEXT COMMENT '列描述',
     alias       JSON COMMENT '列别名',
-    table_id    VARCHAR(64) COMMENT '所属表编号'
+    table_id    VARCHAR(64) COMMENT '所属表编号',
+    CONSTRAINT fk_column_info_table
+        FOREIGN KEY (table_id) REFERENCES table_info (id) ON DELETE CASCADE
 );
 
 DROP TABLE IF EXISTS metric_info;
@@ -45,5 +48,11 @@ CREATE TABLE column_metric
 (
     column_id VARCHAR(64) COMMENT '列编号',
     metric_id VARCHAR(64) COMMENT '指标编号',
-    PRIMARY KEY (column_id, metric_id)
+    PRIMARY KEY (column_id, metric_id),
+    CONSTRAINT fk_column_metric_column
+        FOREIGN KEY (column_id) REFERENCES column_info (id) ON DELETE CASCADE,
+    CONSTRAINT fk_column_metric_metric
+        FOREIGN KEY (metric_id) REFERENCES metric_info (id) ON DELETE CASCADE
 );
+
+SET FOREIGN_KEY_CHECKS = 1;

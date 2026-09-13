@@ -5,7 +5,7 @@ from typing import Literal
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from app.agent.context import QueryContext
+from app.agent.context import DataAgentContext
 from app.agent.nodes import (
     add_extra_context,
     correct_sql,
@@ -20,11 +20,11 @@ from app.agent.nodes import (
     recall_value,
     validate_sql,
 )
-from app.agent.state import QueryState
+from app.agent.state import DataAgentState
 
 
 def route_after_validation(
-    state: QueryState,
+    state: DataAgentState,
 ) -> Literal["execute_sql", "correct_sql", "end"]:
     """根据校验结果和剩余纠错次数选择下一节点"""
     if state.get("sql_valid", False):
@@ -38,7 +38,7 @@ def route_after_validation(
 
 def build_query_graph() -> CompiledStateGraph:
     """构建并编译最小可运行的问数工作流"""
-    graph = StateGraph(QueryState, context_schema=QueryContext)
+    graph = StateGraph(DataAgentState, context_schema=DataAgentContext)
 
     graph.add_node("extract_keywords", extract_keywords)
     graph.add_node("recall_column", recall_column)
@@ -65,6 +65,13 @@ def build_query_graph() -> CompiledStateGraph:
     graph.add_edge("merge_retrieved_info", "filter_metric")
     graph.add_edge(["filter_table", "filter_metric"], "add_extra_context")
     graph.add_edge("add_extra_context", "generate_sql")
+    wire_sql_loop(graph)
+
+    return graph.compile()
+
+
+def wire_sql_loop(graph: StateGraph) -> None:
+    """挂上 SQL 生成、校验、校正和执行的闭环边"""
     graph.add_edge("generate_sql", "validate_sql")
     graph.add_conditional_edges(
         "validate_sql",
@@ -78,7 +85,14 @@ def build_query_graph() -> CompiledStateGraph:
     graph.add_edge("correct_sql", "validate_sql")
     graph.add_edge("execute_sql", END)
 
-    return graph.compile()
-
 
 query_graph = build_query_graph()
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    from app.scripts.query_agent import run
+
+    succeeded = asyncio.run(run("统计华北地区的销售总额", 2, 0))
+    raise SystemExit(0 if succeeded else 1)

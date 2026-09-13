@@ -7,7 +7,6 @@
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 # 单个字段配置
@@ -43,8 +42,8 @@ class MetricConfig:
 
 
 # 元数据知识构建总配置
-# tables 和 metrics 都允许为空 便于分阶段只构建其中一部分
+# tables 和 metrics 共同描述当前知识库的完整权威快照
 @dataclass
 class MetaConfig:
-    tables: Optional[list[TableConfig]] = None
-    metrics: Optional[list[MetricConfig]] = None
+    tables: list[TableConfig]
+    metrics: list[MetricConfig]

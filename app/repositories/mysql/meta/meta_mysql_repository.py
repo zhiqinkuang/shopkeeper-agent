@@ -13,6 +13,8 @@ from app.models.column_info import ColumnInfoMySQL
 from app.models.column_metric import ColumnMetricMySQL
 from app.models.metric_info import MetricInfoMySQL
 from app.models.table_info import TableInfoMySQL
+from app.repositories.mysql.meta.mappers.column_info_mapper import ColumnInfoMapper
+from app.repositories.mysql.meta.mappers.table_info_mapper import TableInfoMapper
 
 
 class MetaMySQLRepository:
@@ -115,6 +117,34 @@ class MetaMySQLRepository:
                 )
             ).all()
         )
+
+    async def get_column_info_by_id(self, id: str) -> ColumnInfo:
+        """按字段 ID 查询完整元数据"""
+        column_info = await self.session.get(ColumnInfoMySQL, id)
+        if column_info is None:
+            raise LookupError(f"字段元数据不存在: {id}")
+        return ColumnInfoMapper.to_entity(column_info)
+
+    async def get_table_info_by_id(self, id: str) -> TableInfo:
+        """按表 ID 查询完整元数据"""
+        table_info = await self.session.get(TableInfoMySQL, id)
+        if table_info is None:
+            raise LookupError(f"表元数据不存在: {id}")
+        return TableInfoMapper.to_entity(table_info)
+
+    async def get_key_columns_by_table_id(
+        self, table_id: str
+    ) -> list[ColumnInfo]:
+        """查询指定表的主键和外键字段"""
+        models = (
+            await self.session.scalars(
+                select(ColumnInfoMySQL).where(
+                    ColumnInfoMySQL.table_id == table_id,
+                    ColumnInfoMySQL.role.in_(("primary_key", "foreign_key")),
+                )
+            )
+        ).all()
+        return [ColumnInfoMapper.to_entity(model) for model in models]
 
     async def sync_table_infos(
         self, table_infos: list[TableInfo], column_infos: list[ColumnInfo]

@@ -103,8 +103,22 @@ async def reset_integration_state(request, mysql_managers, qdrant_client, es_cli
     for collection_name in (TEST_COLUMN_COLLECTION, TEST_METRIC_COLLECTION):
         if await qdrant_client.collection_exists(collection_name):
             await qdrant_client.delete_collection(collection_name)
-    if await es_client.indices.exists(index=TEST_VALUE_INDEX):
-        await es_client.indices.delete(index=TEST_VALUE_INDEX)
+    physical_indexes = list(
+        (
+            await es_client.indices.get(
+                index=f"{TEST_VALUE_INDEX}-*",
+                allow_no_indices=True,
+                ignore_unavailable=True,
+            )
+        ).keys()
+    )
+    if (
+        not await es_client.indices.exists_alias(name=TEST_VALUE_INDEX)
+        and await es_client.indices.exists(index=TEST_VALUE_INDEX)
+    ):
+        physical_indexes.append(TEST_VALUE_INDEX)
+    if physical_indexes:
+        await es_client.indices.delete(index=list(set(physical_indexes)))
 
     yield
 

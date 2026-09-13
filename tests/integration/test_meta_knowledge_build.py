@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 from omegaconf import OmegaConf
+from omegaconf.errors import MissingMandatoryValue
 from sqlalchemy import text
 
 from app.clients.es_client_manager import ESClientManager
 from app.clients.mysql_client_manager import MySQLClientManager
 from app.clients.qdrant_client_manager import QdrantClientManager
 from app.conf.app_config import DBConfig, ESConfig, QdrantConfig
-from app.conf.meta_config import MetaConfig
 from app.scripts import build_meta_knowledge
 from tests.conftest import FakeEmbeddings
 
@@ -107,25 +107,19 @@ async def test_full_build_is_idempotent_and_removes_stale_data(
     }
 
 
-async def test_metrics_only_and_noop_build_modes(
+async def test_missing_snapshot_section_is_rejected(
     integration_service,
     integration_repositories,
-    minimal_config,
     tmp_path,
 ):
     config_path = tmp_path / "meta.yaml"
-    OmegaConf.save(OmegaConf.structured(minimal_config), config_path)
-    await integration_service.build(config_path)
-    baseline = await metadata_counts(integration_repositories)
+    OmegaConf.save({"tables": []}, config_path)
 
-    metrics_only = MetaConfig(tables=None, metrics=minimal_config.metrics)
-    OmegaConf.save(OmegaConf.structured(metrics_only), config_path)
-    await integration_service.build(config_path)
-    assert await metadata_counts(integration_repositories) == baseline
+    with pytest.raises(MissingMandatoryValue, match="metrics"):
+        await integration_service.build(config_path)
 
-    OmegaConf.save({"tables": None, "metrics": None}, config_path)
-    await integration_service.build(config_path)
-    assert await metadata_counts(integration_repositories) == baseline
+    session = integration_repositories["meta"].session
+    assert await session.scalar(text("SELECT COUNT(*) FROM table_info")) == 0
 
 
 async def test_invalid_config_fails_before_index_writes(

@@ -9,4 +9,5 @@ from contextvars import ContextVar
 
 # 使用 ContextVar 而不是普通全局变量
 # 是为了让并发协程之间的 request_id 互不干扰
-request_id_ctx_var = ContextVar("request_id", default="1")
+# 默认值给命令行脚本用：脚本不会经过 FastAPI 中间件，没有人提前 set
+request_id_ctx_var: ContextVar[str] = ContextVar("request_id", default="1")

@@ -210,3 +210,25 @@ async def test_finalize_schema_rejects_missing_formula(
 
     with pytest.raises(ValueError, match="未回填计算公式"):
         await repository.finalize_schema()
+
+
+async def test_meta_repository_saves_and_replays_query_audit(
+    integration_repositories,
+):
+    repository = integration_repositories["meta"]
+
+    audit_id = await repository.save_query_audit(
+        request_id="req-replay",
+        query="统计华北地区销售额",
+        sql_text="SELECT 41099.5 AS gmv",
+        execution_result=[{"gmv": 41099.5}],
+        answer="华北地区销售总额为 41099.5 元。",
+    )
+    record = await repository.get_query_audit("req-replay")
+
+    assert audit_id == "req-replay"
+    assert record["query"] == "统计华北地区销售额"
+    assert record["sql_text"] == "SELECT 41099.5 AS gmv"
+    assert record["execution_result"] == [{"gmv": 41099.5}]
+    assert record["answer"] == "华北地区销售总额为 41099.5 元。"
+    assert await repository.get_query_audit("missing") is None

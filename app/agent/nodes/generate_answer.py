@@ -6,6 +6,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
+from app.agent.answer_grounding import answer_is_grounded, fallback_answer
 from app.agent.context import DataAgentContext
 from app.agent.llm import llm
 from app.agent.nodes.progress import progress_event
@@ -31,16 +32,21 @@ async def generate_answer(
             input_variables=["query", "result"],
         )
         chain = prompt | llm | StrOutputParser()
-        answer = await chain.ainvoke(
-            {
-                "query": state["query"],
-                "result": json.dumps(
-                    rows[:_RESULT_ROW_LIMIT],
-                    ensure_ascii=False,
-                    default=str,
-                ),
-            }
-        )
+        answer = (
+            await chain.ainvoke(
+                {
+                    "query": state["query"],
+                    "result": json.dumps(
+                        rows[:_RESULT_ROW_LIMIT],
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                }
+            )
+        ).strip()
+        if not answer_is_grounded(answer, rows, state["query"]):
+            logger.warning(f"回答数字无法对账，已替换兜底文案：{answer}")
+            answer = fallback_answer(rows)
         logger.info(f"生成的回答：{answer}")
         writer(progress_event(step, "success"))
         writer({"type": "answer", "text": answer})

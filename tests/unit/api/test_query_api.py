@@ -58,6 +58,8 @@ def test_request_id_middleware_sets_unique_context():
 
     assert first.status_code == 200
     assert second.status_code == 200
+    assert first.headers["x-request-id"] == first_id
+    assert second.headers["x-request-id"] == second_id
     assert first_id != "1"
     assert second_id != "1"
     assert first_id != second_id
@@ -72,6 +74,46 @@ def test_query_router_streams_service_output():
     assert response.headers["cache-control"] == "no-cache"
     assert response.headers["x-accel-buffering"] == "no"
     assert "统计华北地区销售额" in response.text
+
+
+def test_get_query_audit_replays_sql():
+    class FakeMeta:
+        async def get_query_audit(self, request_id: str):
+            assert request_id == "req-1"
+            return {
+                "id": "req-1",
+                "request_id": "req-1",
+                "query": "统计华北地区销售额",
+                "sql_text": "SELECT 1",
+                "execution_result": [{"n": 1}],
+                "answer": "结果是 1",
+                "error": None,
+                "created_at": None,
+            }
+
+    app = _query_app()
+    app.dependency_overrides[get_meta_mysql_repository] = lambda: FakeMeta()
+
+    with TestClient(app) as client:
+        response = client.get("/api/audits/req-1")
+
+    assert response.status_code == 200
+    assert response.json()["sql"] == "SELECT 1"
+    assert response.json()["query"] == "统计华北地区销售额"
+
+
+def test_get_query_audit_returns_404_when_missing():
+    class FakeMeta:
+        async def get_query_audit(self, request_id: str):
+            return None
+
+    app = _query_app()
+    app.dependency_overrides[get_meta_mysql_repository] = lambda: FakeMeta()
+
+    with TestClient(app) as client:
+        response = client.get("/api/audits/missing")
+
+    assert response.status_code == 404
 
 
 def test_query_router_rejects_invalid_contract():

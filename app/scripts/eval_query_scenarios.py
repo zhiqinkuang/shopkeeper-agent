@@ -11,6 +11,7 @@ from elasticsearch import AsyncElasticsearch
 from qdrant_client import AsyncQdrantClient
 from sqlalchemy import text
 
+from app.agent.answer_grounding import answer_is_grounded
 from app.agent.context import DataAgentContext
 from app.agent.graph import query_graph
 from app.clients.embedding_client_manager import EmbeddingClientManager
@@ -23,18 +24,48 @@ from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantReposit
 from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
 from app.scripts.query_scenario_catalog import QueryScenario, build_query_scenarios
 
-# 覆盖全局聚合、地区/会员/品类/时间过滤、分组、排序和空结果
+# 40 条抽检：覆盖聚合、过滤、分组、排序、交叉和空结果，并固定回归 B011
 AGENT_SAMPLE_IDS = (
     "G001",
+    "G003",
     "G006",
+    "G008",
     "R001",
+    "R006",
+    "R009",
     "R014",
+    "R015",
     "C001",
+    "C011",
+    "C012",
+    "C014",
+    "C016",
     "P001",
+    "P007",
+    "P013",
+    "P014",
     "T001",
+    "T002",
+    "T006",
+    "T007",
+    "T010",
+    "T012",
     "B001",
+    "B003",
+    "B005",
+    "B011",
+    "B015",
+    "X001",
+    "X003",
+    "X008",
+    "K001",
+    "K002",
+    "K011",
     "K012",
+    "Z001",
     "Z002",
+    "Z003",
+    "Z004",
 )
 
 
@@ -209,6 +240,10 @@ async def eval_agent(scenarios: list[QueryScenario]) -> list[dict]:
                 for row in (merged.get("execution_result") or [])
             ]
             result_hit = results_match(gold_rows, agent_rows)
+            answer = (merged.get("answer") or "").strip()
+            answer_grounded = bool(answer) and answer_is_grounded(
+                answer, agent_rows, scenario["question"]
+            )
             tables = {table["name"] for table in merged.get("table_infos") or []}
             metrics = {metric["name"] for metric in merged.get("metric_infos") or []}
             table_hit = set(scenario["expected_tables"]) <= tables
@@ -217,8 +252,9 @@ async def eval_agent(scenarios: list[QueryScenario]) -> list[dict]:
                 "id": scenario["id"],
                 "category": scenario["category"],
                 "question": scenario["question"],
-                "passed": error is None and result_hit,
+                "passed": error is None and result_hit and answer_grounded,
                 "result_hit": result_hit,
+                "answer_grounded": answer_grounded,
                 "table_hit": table_hit,
                 "metric_hit": metric_hit,
                 "expected_tables": scenario["expected_tables"],
@@ -227,10 +263,19 @@ async def eval_agent(scenarios: list[QueryScenario]) -> list[dict]:
                 "actual_metrics": sorted(metrics),
                 "gold_sample": gold_rows[:3],
                 "agent_sample": agent_rows[:3],
+                "answer": answer,
                 "sql": merged.get("sql"),
                 "elapsed_s": round(time.perf_counter() - started, 3),
                 "error": error,
             }
+            if not item["passed"]:
+                item["diff"] = {
+                    "gold": gold_rows[:5],
+                    "agent": agent_rows[:5],
+                    "sql": merged.get("sql"),
+                    "answer": answer,
+                    "answer_grounded": answer_grounded,
+                }
             results.append(item)
             print(
                 f"{item['id']} passed={item['passed']} "

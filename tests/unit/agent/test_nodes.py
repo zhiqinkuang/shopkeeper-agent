@@ -12,6 +12,7 @@ from app.agent.nodes.execute_sql import execute_sql
 from app.agent.nodes.extract_keywords import extract_keywords
 from app.agent.nodes.filter_metric import filter_metric
 from app.agent.nodes.filter_table import filter_table
+from app.agent.nodes.generate_answer import generate_answer
 from app.agent.nodes.generate_sql import generate_sql
 from app.agent.nodes.merge_retrieved_info import merge_retrieved_info
 from app.agent.nodes.recall_column import recall_column
@@ -512,3 +513,74 @@ async def test_sql_nodes_write_progress_error_then_raise(mocker):
     with pytest.raises(AttributeError):
         await validate_sql({"sql": "SELECT 1"}, broken)
     assert events[-1] == {"type": "progress", "step": "校验SQL", "status": "error"}
+
+
+async def test_generate_answer_keeps_grounded_numbers(mocker):
+    events = []
+    mocker.patch(
+        "app.agent.nodes.generate_answer.llm",
+        RunnableLambda(lambda _: "华北地区销售总额为 41099.5 元。"),
+    )
+
+    result = await generate_answer(
+        {
+            "query": "统计华北地区销售额",
+            "execution_result": [{"gmv": 41099.5}],
+        },
+        SimpleNamespace(stream_writer=events.append, context=None),
+    )
+
+    assert result["answer"] == "华北地区销售总额为 41099.5 元。"
+    assert events[-2] == {"type": "progress", "step": "生成回答", "status": "success"}
+    assert events[-1] == {"type": "answer", "text": "华北地区销售总额为 41099.5 元。"}
+
+
+async def test_generate_answer_replaces_invented_numbers(mocker):
+    mocker.patch(
+        "app.agent.nodes.generate_answer.llm",
+        RunnableLambda(lambda _: "华北地区销售总额为 99999 元。"),
+    )
+
+    result = await generate_answer(
+        {
+            "query": "统计华北地区销售额",
+            "execution_result": [{"gmv": 41099.5}],
+        },
+        _runtime(),
+    )
+
+    assert result["answer"] == "查询完成，请直接查看下方结果。"
+
+
+async def test_generate_answer_allows_year_from_question(mocker):
+    mocker.patch(
+        "app.agent.nodes.generate_answer.llm",
+        RunnableLambda(lambda _: "2025 年没有查到符合条件的数据。"),
+    )
+
+    result = await generate_answer(
+        {
+            "query": "2025年西南地区销售额",
+            "execution_result": [{"gmv": None}],
+        },
+        _runtime(),
+    )
+
+    assert result["answer"] == "2025 年没有查到符合条件的数据。"
+
+
+async def test_generate_answer_uses_empty_fallback(mocker):
+    mocker.patch(
+        "app.agent.nodes.generate_answer.llm",
+        RunnableLambda(lambda _: "西南地区卖了 100 万。"),
+    )
+
+    result = await generate_answer(
+        {
+            "query": "统计西南地区销售额",
+            "execution_result": [],
+        },
+        _runtime(),
+    )
+
+    assert result["answer"] == "没有查到符合条件的数据。"

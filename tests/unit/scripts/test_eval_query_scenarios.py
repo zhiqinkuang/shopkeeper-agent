@@ -15,7 +15,8 @@ def test_select_scenarios_keeps_sample_order_and_coverage():
     scenarios = select_scenarios(AGENT_SAMPLE_IDS)
 
     assert [item["id"] for item in scenarios] == list(AGENT_SAMPLE_IDS)
-    assert len(scenarios) == 10
+    assert len(scenarios) == 40
+    assert "B011" in AGENT_SAMPLE_IDS
     assert {item["category"] for item in scenarios} >= {
         "global_agg",
         "region",

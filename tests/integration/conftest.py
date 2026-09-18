@@ -10,7 +10,10 @@ from app.clients.mysql_client_manager import MySQLClientManager
 from app.conf.app_config import DBConfig
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
-from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
+from app.repositories.mysql.meta.meta_mysql_repository import (
+    QUERY_AUDIT_TABLE_SQL,
+    MetaMySQLRepository,
+)
 from app.repositories.qdrant.column_qdrant_repository import (
     ColumnQdrantRepository,
 )
@@ -66,7 +69,9 @@ async def reset_integration_state(request, mysql_managers, qdrant_client, es_cli
 
     meta_manager, _ = mysql_managers
     async with meta_manager.session_factory() as session:
+        await session.execute(text(QUERY_AUDIT_TABLE_SQL))
         for table_name in (
+            "query_audit",
             "column_metric",
             "metric_info",
             "column_info",

@@ -39,6 +39,8 @@ async def test_agent_sample_matches_gold_results():
             "error": item["error"],
             "gold_sample": item["gold_sample"],
             "agent_sample": item["agent_sample"],
+            "answer": item.get("answer"),
+            "diff": item.get("diff"),
             "sql": item["sql"],
         }
         for item in results

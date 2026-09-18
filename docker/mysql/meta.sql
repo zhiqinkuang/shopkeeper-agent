@@ -55,4 +55,18 @@ CREATE TABLE column_metric
         FOREIGN KEY (metric_id) REFERENCES metric_info (id) ON DELETE CASCADE
 );
 
+DROP TABLE IF EXISTS query_audit;
+CREATE TABLE query_audit
+(
+    id               VARCHAR(64) PRIMARY KEY COMMENT '审计编号',
+    request_id       VARCHAR(64) COMMENT '请求编号',
+    query            TEXT NOT NULL COMMENT '用户问题',
+    sql_text         TEXT COMMENT '最终 SQL',
+    execution_result JSON COMMENT '查询结果',
+    answer           TEXT COMMENT '自然语言回答',
+    error            TEXT COMMENT '错误信息',
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_query_audit_request_id (request_id)
+);
+
 SET FOREIGN_KEY_CHECKS = 1;

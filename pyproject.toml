@@ -1,7 +1,7 @@
 [project]
 name = "shopkeeper-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "电商问数智能体：自然语言到 SQL，LangGraph + FastAPI"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -43,6 +43,7 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "--import-mode=importlib"
 markers = [
     "unit: 不依赖外部服务的快速测试",

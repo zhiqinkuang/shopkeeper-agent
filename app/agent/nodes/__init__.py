@@ -6,6 +6,7 @@ from app.agent.nodes.execute_sql import execute_sql
 from app.agent.nodes.extract_keywords import extract_keywords
 from app.agent.nodes.filter_metric import filter_metric
 from app.agent.nodes.filter_table import filter_table
+from app.agent.nodes.generate_answer import generate_answer
 from app.agent.nodes.generate_sql import generate_sql
 from app.agent.nodes.merge_retrieved_info import merge_retrieved_info
 from app.agent.nodes.recall_column import recall_column
@@ -20,6 +21,7 @@ __all__ = [
     "extract_keywords",
     "filter_metric",
     "filter_table",
+    "generate_answer",
     "generate_sql",
     "merge_retrieved_info",
     "recall_column",

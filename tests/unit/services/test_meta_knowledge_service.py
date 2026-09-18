@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.conf.meta_config import MetaConfig
 from app.entities.column_metric import ColumnMetric
 from app.entities.table_info import TableInfo
 from tests.conftest import FakeEmbeddings
@@ -59,6 +58,12 @@ def test_validate_max_length_rejects_oversized_value(service_factory):
             ),
             "引用了未配置字段",
         ),
+        (
+            lambda config: setattr(
+                config.metrics[0], "relevant_columns", ["invalid-column"]
+            ),
+            "关联字段格式无效",
+        ),
     ],
 )
 async def test_validate_meta_config_rejects_invalid_values(
@@ -90,30 +95,6 @@ async def test_validate_meta_config_rejects_duplicate_table(
     config.tables.append(copy.deepcopy(config.tables[0]))
 
     with pytest.raises(ValueError, match="存在重复表"):
-        await service._validate_meta_config(config)
-
-
-async def test_validate_metrics_only_uses_existing_column_ids(
-    service_factory, minimal_config
-):
-    service, dependencies = service_factory()
-    dependencies.meta.get_column_ids.return_value = {"dim_region.province"}
-    config = MetaConfig(tables=None, metrics=minimal_config.metrics)
-
-    result = await service._validate_meta_config(config)
-
-    assert result == {}
-    dependencies.meta.get_column_ids.assert_awaited_once()
-
-
-async def test_removing_referenced_column_requires_metrics(
-    service_factory, minimal_config
-):
-    service, dependencies = service_factory()
-    dependencies.meta.get_metric_column_ids.return_value = {"dim_region.old_column"}
-    config = MetaConfig(tables=minimal_config.tables, metrics=None)
-
-    with pytest.raises(ValueError, match="必须同时提供 metrics"):
         await service._validate_meta_config(config)
 
 
@@ -187,7 +168,7 @@ async def test_value_sync_filters_columns_and_uses_stable_ids(
     service_factory, minimal_config, column_info
 ):
     service, dependencies = service_factory()
-    dependencies.dw.get_column_values.return_value = [1, "广东省"]
+    dependencies.dw.get_column_values.return_value = [1, "1", "广东省"]
 
     await service._save_value_info_to_es(minimal_config, [column_info])
 
@@ -266,17 +247,17 @@ async def test_build_runs_complete_pipeline(service_factory, minimal_config, tmp
     dependencies.meta.sync_metric_infos.assert_awaited_once()
 
 
-async def test_build_with_none_sections_does_not_sync(service_factory, tmp_path):
+async def test_build_with_empty_snapshot_clears_all_stores(service_factory, tmp_path):
     from omegaconf import OmegaConf
 
     service, dependencies = service_factory()
     config_path = tmp_path / "meta.yaml"
-    OmegaConf.save({"tables": None, "metrics": None}, config_path)
+    OmegaConf.save({"tables": [], "metrics": []}, config_path)
 
     await service.build(config_path)
 
-    dependencies.column.sync.assert_not_awaited()
-    dependencies.value.sync.assert_not_awaited()
-    dependencies.metric.sync.assert_not_awaited()
-    dependencies.meta.sync_table_infos.assert_not_awaited()
-    dependencies.meta.sync_metric_infos.assert_not_awaited()
+    dependencies.column.sync.assert_awaited_once_with([], [], [])
+    dependencies.value.sync.assert_awaited_once_with([])
+    dependencies.metric.sync.assert_awaited_once_with([], [], [])
+    dependencies.meta.sync_table_infos.assert_awaited_once_with([], [])
+    dependencies.meta.sync_metric_infos.assert_awaited_once_with([], [])

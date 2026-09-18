@@ -13,164 +13,185 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def repository():
     indices = SimpleNamespace(
-        exists=AsyncMock(),
+        exists=AsyncMock(return_value=False),
+        exists_alias=AsyncMock(return_value=False),
         create=AsyncMock(),
         get_mapping=AsyncMock(),
-        put_mapping=AsyncMock(),
+        get_alias=AsyncMock(return_value={}),
+        update_aliases=AsyncMock(),
         refresh=AsyncMock(),
+        get=AsyncMock(return_value={}),
+        delete=AsyncMock(),
     )
     client = SimpleNamespace(
         indices=indices,
         bulk=AsyncMock(return_value={"errors": False, "items": []}),
-        delete_by_query=AsyncMock(
-            return_value={
-                "timed_out": False,
-                "version_conflicts": 0,
-                "failures": [],
-            }
-        ),
+        count=AsyncMock(return_value={"count": 0}),
         search=AsyncMock(),
     )
-    repo = ValueESRepository(client)
-    repo.index_name = "test_values"
-    return repo, client
+    return ValueESRepository(client, "test_values"), client
 
 
-def valid_mapping(repo):
+def valid_mapping(repo, physical_index="test_values-current"):
     mapping = deepcopy(repo.index_mappings)
     mapping["dynamic"] = "false"
     mapping["properties"]["value"].pop("search_analyzer")
-    return {repo.index_name: {"mappings": mapping}}
+    return {physical_index: {"mappings": mapping}}
 
 
-async def test_ensure_index_creates_missing_index(repository):
+async def test_ensure_index_allows_missing_alias(repository):
     repo, client = repository
-    client.indices.exists.return_value = False
 
     await repo.ensure_index()
 
-    client.indices.create.assert_awaited_once_with(
-        index=repo.index_name,
-        mappings=repo.index_mappings,
-    )
+    client.indices.create.assert_not_awaited()
 
 
-async def test_ensure_index_accepts_valid_mapping(repository):
+async def test_ensure_index_rejects_concrete_name_conflict(repository):
     repo, client = repository
     client.indices.exists.return_value = True
+
+    with pytest.raises(ValueError, match="同名物理索引冲突"):
+        await repo.ensure_index()
+
+
+async def test_ensure_index_accepts_valid_single_alias(repository):
+    repo, client = repository
+    client.indices.exists_alias.return_value = True
     client.indices.get_mapping.return_value = valid_mapping(repo)
 
     await repo.ensure_index()
 
-    client.indices.put_mapping.assert_not_awaited()
+    client.indices.get_mapping.assert_awaited_once_with(index=repo.index_name)
 
 
-async def test_ensure_index_upgrades_build_id_mapping(repository):
+async def test_ensure_index_rejects_multiple_alias_targets(repository):
     repo, client = repository
-    client.indices.exists.return_value = True
+    client.indices.exists_alias.return_value = True
     mapping = valid_mapping(repo)
-    mapping[repo.index_name]["mappings"]["properties"].pop("build_id")
+    mapping["test_values-other"] = mapping["test_values-current"]
     client.indices.get_mapping.return_value = mapping
 
-    await repo.ensure_index()
-
-    client.indices.put_mapping.assert_awaited_once_with(
-        index=repo.index_name,
-        properties={"build_id": {"type": "keyword"}},
-    )
-
-
-async def test_ensure_index_rejects_dynamic_mapping(repository):
-    repo, client = repository
-    client.indices.exists.return_value = True
-    mapping = valid_mapping(repo)
-    mapping[repo.index_name]["mappings"]["dynamic"] = True
-    client.indices.get_mapping.return_value = mapping
-
-    with pytest.raises(ValueError, match="必须关闭动态映射"):
+    with pytest.raises(ValueError, match="只指向一个物理索引"):
         await repo.ensure_index()
 
 
-async def test_ensure_index_rejects_missing_or_wrong_mapping(repository):
+async def test_ensure_index_rejects_wrong_mapping(repository):
     repo, client = repository
-    client.indices.exists.return_value = True
+    client.indices.exists_alias.return_value = True
     mapping = valid_mapping(repo)
-    mapping[repo.index_name]["mappings"]["properties"].pop("column_id")
+    mapping["test_values-current"]["mappings"]["dynamic"] = True
     client.indices.get_mapping.return_value = mapping
+    with pytest.raises(ValueError, match="必须关闭动态映射"):
+        await repo.ensure_index()
 
+    mapping = valid_mapping(repo)
+    mapping["test_values-current"]["mappings"]["properties"].pop("column_id")
+    client.indices.get_mapping.return_value = mapping
     with pytest.raises(ValueError, match="缺少映射字段"):
         await repo.ensure_index()
 
     mapping = valid_mapping(repo)
-    mapping[repo.index_name]["mappings"]["properties"]["value"]["analyzer"] = "standard"
+    mapping["test_values-current"]["mappings"]["properties"]["value"]["analyzer"] = (
+        "standard"
+    )
     client.indices.get_mapping.return_value = mapping
     with pytest.raises(ValueError, match="映射不匹配"):
         await repo.ensure_index()
 
 
-async def test_sync_writes_build_marker_and_deletes_stale(repository):
+async def test_sync_builds_index_switches_alias_and_removes_stale(repository):
     repo, client = repository
     values = [
         ValueInfo("id-1", "华南", "dim_region.region_name"),
         ValueInfo("id-2", "华东", "dim_region.region_name"),
     ]
+    client.count.return_value = {"count": 2}
+    client.indices.exists_alias.return_value = True
+    client.indices.get_alias.return_value = {"test_values-old": {}}
+    client.indices.get.return_value = {
+        "test_values-old": {},
+        "test_values-orphan": {},
+    }
 
     await repo.sync(values, batch_size=1)
 
     assert client.bulk.await_count == 2
+    physical_index = client.indices.create.await_args.kwargs["index"]
+    assert physical_index.startswith("test_values-")
     first_operations = client.bulk.await_args_list[0].kwargs["operations"]
-    assert first_operations[0] == {"index": {"_index": repo.index_name, "_id": "id-1"}}
-    build_id = first_operations[1]["build_id"]
-    assert first_operations[1]["value"] == "华南"
-    second_operations = client.bulk.await_args_list[1].kwargs["operations"]
-    assert second_operations[1]["build_id"] == build_id
-    client.indices.refresh.assert_awaited_once_with(index=repo.index_name)
-    assert client.delete_by_query.await_args.kwargs["query"] == {
-        "bool": {"must_not": [{"term": {"build_id": build_id}}]}
-    }
+    assert first_operations == [
+        {"index": {"_index": physical_index, "_id": "id-1"}},
+        {
+            "id": "id-1",
+            "value": "华南",
+            "column_id": "dim_region.region_name",
+        },
+    ]
+    client.indices.refresh.assert_awaited_once_with(index=physical_index)
+    client.indices.update_aliases.assert_awaited_once_with(
+        actions=[
+            {
+                "remove": {
+                    "index": "test_values-old",
+                    "alias": "test_values",
+                }
+            },
+            {"add": {"index": physical_index, "alias": "test_values"}},
+        ]
+    )
+    client.indices.delete.assert_awaited_once_with(
+        index=["test_values-old", "test_values-orphan"]
+    )
 
 
-async def test_sync_empty_values_clears_index(repository):
+async def test_sync_empty_snapshot_still_switches_to_empty_index(repository):
     repo, client = repository
 
     await repo.sync([])
 
+    physical_index = client.indices.create.await_args.kwargs["index"]
     client.bulk.assert_not_awaited()
-    client.indices.refresh.assert_not_awaited()
-    assert client.delete_by_query.await_args.kwargs["query"] == {"match_all": {}}
+    client.indices.refresh.assert_awaited_once_with(index=physical_index)
+    client.count.assert_awaited_once_with(index=physical_index)
+    client.indices.update_aliases.assert_awaited_once()
 
 
-async def test_sync_raises_for_bulk_failure(repository):
+async def test_sync_removes_new_index_when_bulk_fails(repository):
     repo, client = repository
     client.bulk.return_value = {
         "errors": True,
         "items": [{"index": {"_id": "id-1", "error": {"type": "bad"}}}],
     }
+    client.indices.exists.return_value = True
 
     with pytest.raises(RuntimeError, match="批量写入失败"):
         await repo.sync([ValueInfo("id-1", "华南", "column")])
 
-    client.delete_by_query.assert_not_awaited()
+    physical_index = client.indices.create.await_args.kwargs["index"]
+    client.indices.delete.assert_awaited_once_with(index=physical_index)
+    client.indices.update_aliases.assert_not_awaited()
 
 
-@pytest.mark.parametrize(
-    "delete_result",
-    [
-        {"timed_out": True, "version_conflicts": 0, "failures": []},
-        {"timed_out": False, "version_conflicts": 1, "failures": []},
-        {
-            "timed_out": False,
-            "version_conflicts": 0,
-            "failures": [{"cause": "failed"}],
-        },
-    ],
-)
-async def test_sync_raises_for_delete_failure(repository, delete_result):
+async def test_sync_rejects_count_mismatch_before_alias_switch(repository):
     repo, client = repository
-    client.delete_by_query.return_value = delete_result
+    client.indices.exists.return_value = True
 
-    with pytest.raises(RuntimeError, match="陈旧字段取值删除失败"):
+    with pytest.raises(RuntimeError, match="写入数量不匹配"):
+        await repo.sync([ValueInfo("id-1", "华南", "column")])
+
+    client.indices.update_aliases.assert_not_awaited()
+
+
+async def test_sync_keeps_new_index_after_alias_switch_failure(repository):
+    repo, client = repository
+    client.indices.get.return_value = {"test_values-old": {}}
+    client.indices.delete.side_effect = RuntimeError("delete failed")
+
+    with pytest.raises(RuntimeError, match="delete failed"):
         await repo.sync([])
+
+    assert client.indices.delete.await_count == 1
 
 
 async def test_search_restores_value_entities(repository):
@@ -183,7 +204,6 @@ async def test_search_restores_value_entities(repository):
                         "id": "id-1",
                         "value": "华南",
                         "column_id": "dim_region.region_name",
-                        "build_id": "build",
                     }
                 }
             ]

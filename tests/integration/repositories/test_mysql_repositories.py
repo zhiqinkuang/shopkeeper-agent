@@ -29,6 +29,51 @@ async def test_dw_repository_rejects_missing_column(integration_repositories):
         await repository.get_column_values("dim_region", "missing")
 
 
+async def test_dw_repository_validate_and_run_north_china_gmv(
+    integration_repositories,
+):
+    repository = integration_repositories["dw"]
+    sql = """
+        SELECT ROUND(SUM(fact_order.order_amount), 2) AS gmv
+        FROM fact_order
+        JOIN dim_region ON fact_order.region_id = dim_region.region_id
+        WHERE dim_region.region_name = '华北'
+    """
+
+    await repository.validate(sql)
+    rows = await repository.run(sql)
+
+    assert len(rows) == 1
+    assert float(rows[0]["gmv"]) == 41099.5
+
+
+async def test_dw_repository_validate_rejects_unknown_column(
+    integration_repositories,
+):
+    repository = integration_repositories["dw"]
+
+    with pytest.raises(Exception, match="Unknown column"):
+        await repository.validate("SELECT missing_column FROM fact_order")
+
+
+async def test_dw_repository_run_returns_list_of_dicts(integration_repositories):
+    repository = integration_repositories["dw"]
+
+    rows = await repository.run("SELECT 1 AS n")
+
+    assert rows == [{"n": 1}]
+    assert isinstance(rows[0], dict)
+
+
+async def test_dw_repository_rejects_write_sql(integration_repositories):
+    repository = integration_repositories["dw"]
+
+    with pytest.raises(ValueError, match="只允许只读 SELECT"):
+        await repository.validate("DELETE FROM fact_order")
+    with pytest.raises(ValueError, match="只允许只读 SELECT"):
+        await repository.run("INSERT INTO fact_order (order_id) VALUES (1)")
+
+
 async def test_meta_repository_syncs_and_removes_stale_data(
     integration_repositories,
 ):
@@ -165,3 +210,25 @@ async def test_finalize_schema_rejects_missing_formula(
 
     with pytest.raises(ValueError, match="未回填计算公式"):
         await repository.finalize_schema()
+
+
+async def test_meta_repository_saves_and_replays_query_audit(
+    integration_repositories,
+):
+    repository = integration_repositories["meta"]
+
+    audit_id = await repository.save_query_audit(
+        request_id="req-replay",
+        query="统计华北地区销售额",
+        sql_text="SELECT 41099.5 AS gmv",
+        execution_result=[{"gmv": 41099.5}],
+        answer="华北地区销售总额为 41099.5 元。",
+    )
+    record = await repository.get_query_audit("req-replay")
+
+    assert audit_id == "req-replay"
+    assert record["query"] == "统计华北地区销售额"
+    assert record["sql_text"] == "SELECT 41099.5 AS gmv"
+    assert record["execution_result"] == [{"gmv": 41099.5}]
+    assert record["answer"] == "华北地区销售总额为 41099.5 元。"
+    assert await repository.get_query_audit("missing") is None

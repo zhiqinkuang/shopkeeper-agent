@@ -152,4 +152,71 @@ jobs:
         run: test -n "$EMBEDDING_API_KEY"
 
       - name: 真实 Embedding 冒烟测试
-        run: uv run pytest tests/external -m external -q
+        run: uv run pytest tests/external/test_real_embedding.py -m external -q
+
+  agent-eval:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      RUN_REAL_LLM: "1"
+      NO_PROXY: "*"
+      no_proxy: "*"
+      DB_META_HOST: 127.0.0.1
+      DB_META_PORT: 13307
+      DB_META_USER: didilili
+      DB_META_PASSWORD: test-password
+      DB_META_DATABASE: meta
+      DB_DW_HOST: 127.0.0.1
+      DB_DW_PORT: 13307
+      DB_DW_USER: didilili
+      DB_DW_PASSWORD: test-password
+      DB_DW_DATABASE: dw
+      QDRANT_HOST: 127.0.0.1
+      QDRANT_PORT: 16333
+      ES_HOST: 127.0.0.1
+      ES_PORT: 19200
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: 安装依赖
+        run: uv sync --locked --group dev
+
+      - name: 校验真实模型密钥
+        run: test -n "$EMBEDDING_API_KEY" && test -n "$LLM_API_KEY"
+
+      - name: 启动隔离联调服务
+        working-directory: docker
+        run: >
+          docker compose -p shopkeeper-agent-test
+          -f docker-compose.test.yml up -d --build --wait
+
+      - name: 构建元数据知识库
+        run: uv run python app/scripts/build_meta_knowledge.py -c conf/meta_config.yaml
+
+      - name: 40 条结果对账
+        run: uv run pytest tests/external/test_agent_gold_sample.py -q
+
+      - name: 输出联调服务日志
+        if: failure()
+        working-directory: docker
+        run: >
+          docker compose -p shopkeeper-agent-test
+          -f docker-compose.test.yml logs --no-color
+
+      - name: 清理隔离联调服务
+        if: always()
+        working-directory: docker
+        run: >
+          docker compose -p shopkeeper-agent-test
+          -f docker-compose.test.yml down -v --remove-orphans

@@ -3,10 +3,22 @@
 import argparse
 import asyncio
 import json
-from dataclasses import asdict
+from contextlib import AsyncExitStack
 
-from app.agent.context import QueryContext
+from app.agent.context import DataAgentContext
 from app.agent.graph import query_graph
+from app.clients.embedding_client_manager import embedding_client_manager
+from app.clients.es_client_manager import es_client_manager
+from app.clients.mysql_client_manager import (
+    dw_mysql_client_manager,
+    meta_mysql_client_manager,
+)
+from app.clients.qdrant_client_manager import qdrant_client_manager
+from app.repositories.es.value_es_repository import ValueESRepository
+from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
+from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
+from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantRepository
+from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
 
 
 async def run(
@@ -15,23 +27,60 @@ async def run(
     simulated_validation_failures: int,
 ) -> bool:
     """运行工作流并逐节点输出状态增量"""
-    context = QueryContext(
-        max_correction_attempts=max_correction_attempts,
-        simulated_validation_failures=simulated_validation_failures,
-    )
-    succeeded = True
-    async for update in query_graph.astream(
-        {"question": question},
-        context=asdict(context),
-        stream_mode="updates",
-    ):
-        print(json.dumps(update, ensure_ascii=False, default=str))
-        if any(
-            isinstance(node_update, dict) and node_update.get("error")
-            for node_update in update.values()
+    async with AsyncExitStack() as exit_stack:
+        qdrant_client_manager.init()
+        exit_stack.push_async_callback(qdrant_client_manager.close)
+        embedding_client_manager.init()
+        exit_stack.push_async_callback(embedding_client_manager.close)
+        es_client_manager.init()
+        exit_stack.push_async_callback(es_client_manager.close)
+        meta_mysql_client_manager.init()
+        exit_stack.push_async_callback(meta_mysql_client_manager.close)
+        dw_mysql_client_manager.init()
+        exit_stack.push_async_callback(dw_mysql_client_manager.close)
+
+        assert qdrant_client_manager.client is not None
+        assert embedding_client_manager.client is not None
+        assert es_client_manager.client is not None
+        assert meta_mysql_client_manager.session_factory is not None
+        assert dw_mysql_client_manager.session_factory is not None
+        meta_session = await exit_stack.enter_async_context(
+            meta_mysql_client_manager.session_factory()
+        )
+        dw_session = await exit_stack.enter_async_context(
+            dw_mysql_client_manager.session_factory()
+        )
+        context = DataAgentContext(
+            column_qdrant_repository=ColumnQdrantRepository(
+                qdrant_client_manager.client
+            ),
+            embedding_client=embedding_client_manager.client,
+            metric_qdrant_repository=MetricQdrantRepository(
+                qdrant_client_manager.client
+            ),
+            value_es_repository=ValueESRepository(es_client_manager.client),
+            meta_mysql_repository=MetaMySQLRepository(meta_session),
+            dw_mysql_repository=DWMySQLRepository(dw_session),
+            max_correction_attempts=max_correction_attempts,
+            simulated_validation_failures=simulated_validation_failures,
+        )
+
+        execution_result = None
+        last_error = None
+        async for update in query_graph.astream(
+            {"query": question},
+            context=context,
+            stream_mode="updates",
         ):
-            succeeded = False
-    return succeeded
+            print(json.dumps(update, ensure_ascii=False, default=str))
+            for node_update in update.values():
+                if not isinstance(node_update, dict):
+                    continue
+                if "execution_result" in node_update:
+                    execution_result = node_update["execution_result"]
+                if "error" in node_update:
+                    last_error = node_update["error"]
+        return execution_result is not None and not last_error
 
 
 def main() -> int:

@@ -1,5 +1,6 @@
 """元数据 MySQL 仓储模块"""
 
+import json
 from dataclasses import asdict
 
 from sqlalchemy import delete, select, text
@@ -13,14 +14,106 @@ from app.models.column_info import ColumnInfoMySQL
 from app.models.column_metric import ColumnMetricMySQL
 from app.models.metric_info import MetricInfoMySQL
 from app.models.table_info import TableInfoMySQL
+from app.repositories.mysql.meta.mappers.column_info_mapper import ColumnInfoMapper
+from app.repositories.mysql.meta.mappers.table_info_mapper import TableInfoMapper
+
+QUERY_AUDIT_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS query_audit
+(
+    id               VARCHAR(64) PRIMARY KEY COMMENT '审计编号',
+    request_id       VARCHAR(64) COMMENT '请求编号',
+    query            TEXT NOT NULL COMMENT '用户问题',
+    sql_text         TEXT COMMENT '最终 SQL',
+    execution_result JSON COMMENT '查询结果',
+    answer           TEXT COMMENT '自然语言回答',
+    error            TEXT COMMENT '错误信息',
+    created_at       DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_query_audit_request_id (request_id)
+)
+"""
 
 
 class MetaMySQLRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    async def ensure_query_audit_table(self) -> None:
+        """已有库也补上查询审计表，避免只能靠重建元数据库。"""
+        await self.session.execute(text(QUERY_AUDIT_TABLE_SQL))
+
+    async def save_query_audit(
+        self,
+        *,
+        request_id: str,
+        query: str,
+        sql_text: str | None = None,
+        execution_result: list | None = None,
+        answer: str | None = None,
+        error: str | None = None,
+    ) -> str:
+        """按 request_id 覆盖写入一次问答，便于按请求回放 SQL。"""
+        await self.ensure_query_audit_table()
+        await self.session.execute(
+            text(
+                """
+                INSERT INTO query_audit
+                    (id, request_id, query, sql_text, execution_result, answer, error)
+                VALUES
+                    (:id, :request_id, :query, :sql_text, :execution_result, :answer, :error)
+                ON DUPLICATE KEY UPDATE
+                    query = VALUES(query),
+                    sql_text = VALUES(sql_text),
+                    execution_result = VALUES(execution_result),
+                    answer = VALUES(answer),
+                    error = VALUES(error)
+                """
+            ),
+            {
+                "id": request_id,
+                "request_id": request_id,
+                "query": query,
+                "sql_text": sql_text,
+                "execution_result": (
+                    json.dumps(execution_result, ensure_ascii=False, default=str)
+                    if execution_result is not None
+                    else None
+                ),
+                "answer": answer,
+                "error": error,
+            },
+        )
+        await self.session.commit()
+        return request_id
+
+    async def get_query_audit(self, request_id: str) -> dict | None:
+        """按请求编号回放一次问答的 SQL 和结果。"""
+        await self.ensure_query_audit_table()
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT id, request_id, query, sql_text, execution_result,
+                           answer, error, created_at
+                    FROM query_audit
+                    WHERE request_id = :request_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"request_id": request_id},
+            )
+        ).mappings().first()
+        if row is None:
+            return None
+        record = dict(row)
+        result = record.get("execution_result")
+        if isinstance(result, str):
+            record["execution_result"] = json.loads(result)
+        return record
+
     async def ensure_schema(self, can_backfill_formula: bool):
         """确保已有元数据库包含当前构建链路需要的字段"""
+        await self.ensure_query_audit_table()
         formula_column = (
             await self.session.execute(
                 text(
@@ -115,6 +208,34 @@ class MetaMySQLRepository:
                 )
             ).all()
         )
+
+    async def get_column_info_by_id(self, id: str) -> ColumnInfo:
+        """按字段 ID 查询完整元数据"""
+        column_info = await self.session.get(ColumnInfoMySQL, id)
+        if column_info is None:
+            raise LookupError(f"字段元数据不存在: {id}")
+        return ColumnInfoMapper.to_entity(column_info)
+
+    async def get_table_info_by_id(self, id: str) -> TableInfo:
+        """按表 ID 查询完整元数据"""
+        table_info = await self.session.get(TableInfoMySQL, id)
+        if table_info is None:
+            raise LookupError(f"表元数据不存在: {id}")
+        return TableInfoMapper.to_entity(table_info)
+
+    async def get_key_columns_by_table_id(
+        self, table_id: str
+    ) -> list[ColumnInfo]:
+        """查询指定表的主键和外键字段"""
+        models = (
+            await self.session.scalars(
+                select(ColumnInfoMySQL).where(
+                    ColumnInfoMySQL.table_id == table_id,
+                    ColumnInfoMySQL.role.in_(("primary_key", "foreign_key")),
+                )
+            )
+        ).all()
+        return [ColumnInfoMapper.to_entity(model) for model in models]
 
     async def sync_table_infos(
         self, table_infos: list[TableInfo], column_infos: list[ColumnInfo]

@@ -31,7 +31,6 @@ class ValueESRepository:
                 "search_analyzer": "ik_max_word",
             },
             "column_id": {"type": "keyword"},
-            "build_id": {"type": "keyword"},
         },
     }
 
@@ -44,28 +43,22 @@ class ValueESRepository:
         self.index_name = index_name or type(self).index_name
 
     async def ensure_index(self):
-        """确保字段取值索引存在，并校验现有映射"""
-        if not await self.client.indices.exists(index=self.index_name):
-            await self.client.indices.create(
-                index=self.index_name, mappings=self.index_mappings
-            )
+        """确保查询名称可作为别名，并校验当前物理索引映射"""
+        if not await self.client.indices.exists_alias(name=self.index_name):
+            if await self.client.indices.exists(index=self.index_name):
+                raise ValueError(
+                    f"字段取值查询别名与同名物理索引冲突: {self.index_name}"
+                )
             return
 
         mapping_response = await self.client.indices.get_mapping(index=self.index_name)
-        actual_mapping = mapping_response[self.index_name]["mappings"]
+        if len(mapping_response) != 1:
+            raise ValueError("字段取值查询别名必须只指向一个物理索引")
+        actual_mapping = next(iter(mapping_response.values()))["mappings"]
         if actual_mapping.get("dynamic") not in (False, "false"):
             raise ValueError("字段取值索引必须关闭动态映射")
 
         actual_properties = actual_mapping.get("properties", {})
-        if "build_id" not in actual_properties:
-            await self.client.indices.put_mapping(
-                index=self.index_name,
-                properties={"build_id": self.index_mappings["properties"]["build_id"]},
-            )
-            actual_properties["build_id"] = self.index_mappings["properties"][
-                "build_id"
-            ]
-
         for field_name, expected_mapping in self.index_mappings["properties"].items():
             actual_field_mapping = actual_properties.get(field_name)
             if actual_field_mapping is None:
@@ -81,50 +74,87 @@ class ValueESRepository:
                     )
 
     async def sync(self, value_infos: list[ValueInfo], batch_size: int = 20):
-        """写入当前字段取值，并删除本次构建中已经不存在的文档"""
-        build_id = str(uuid.uuid4())
-        for i in range(0, len(value_infos), batch_size):
-            batch_value_infos = value_infos[i : i + batch_size]
-            batch_operations = []
-            for value_info in batch_value_infos:
-                # 用 ValueInfo.id 作为文档 id，这样重复构建时会覆盖同一条值记录
-                batch_operations.append(
-                    {"index": {"_index": self.index_name, "_id": value_info.id}}
-                )
-                document = asdict(value_info)
-                document["build_id"] = build_id
-                batch_operations.append(document)
-            response = await self.client.bulk(operations=batch_operations)
-            if response.get("errors"):
-                failures = [
-                    item["index"]
-                    for item in response["items"]
-                    if item["index"].get("error")
-                ]
-                raise RuntimeError(f"字段取值批量写入失败: {failures}")
-
-        if value_infos:
-            await self.client.indices.refresh(index=self.index_name)
-            stale_query = {"bool": {"must_not": [{"term": {"build_id": build_id}}]}}
-        else:
-            stale_query = {"match_all": {}}
-
-        delete_response = await self.client.delete_by_query(
-            index=self.index_name,
-            query=stale_query,
-            refresh=True,
+        """构建新物理索引，校验完成后原子切换查询别名"""
+        physical_index = f"{self.index_name}-{uuid.uuid4().hex}"
+        alias_switched = False
+        await self.client.indices.create(
+            index=physical_index,
+            mappings=self.index_mappings,
         )
-        if (
-            delete_response.get("timed_out")
-            or delete_response.get("version_conflicts")
-            or delete_response.get("failures")
-        ):
-            raise RuntimeError(
-                "陈旧字段取值删除失败: "
-                f"timed_out={delete_response.get('timed_out')}, "
-                f"version_conflicts={delete_response.get('version_conflicts')}, "
-                f"failures={delete_response.get('failures')}"
+        try:
+            for i in range(0, len(value_infos), batch_size):
+                batch_value_infos = value_infos[i : i + batch_size]
+                batch_operations = []
+                for value_info in batch_value_infos:
+                    batch_operations.append(
+                        {"index": {"_index": physical_index, "_id": value_info.id}}
+                    )
+                    batch_operations.append(asdict(value_info))
+                response = await self.client.bulk(operations=batch_operations)
+                if response.get("errors"):
+                    failures = [
+                        item["index"]
+                        for item in response["items"]
+                        if item["index"].get("error")
+                    ]
+                    raise RuntimeError(f"字段取值批量写入失败: {failures}")
+
+            await self.client.indices.refresh(index=physical_index)
+            actual_count = (await self.client.count(index=physical_index))["count"]
+            if actual_count != len(value_infos):
+                raise RuntimeError(
+                    "字段取值写入数量不匹配: "
+                    f"期望 {len(value_infos)}, 实际 {actual_count}"
+                )
+
+            old_indexes: list[str] = []
+            if await self.client.indices.exists_alias(name=self.index_name):
+                old_indexes = list(
+                    (await self.client.indices.get_alias(name=self.index_name)).keys()
+                )
+            alias_actions = [
+                {
+                    "remove": {
+                        "index": old_index,
+                        "alias": self.index_name,
+                    }
+                }
+                for old_index in old_indexes
+            ]
+            alias_actions.append(
+                {
+                    "add": {
+                        "index": physical_index,
+                        "alias": self.index_name,
+                    }
+                }
             )
+            await self.client.indices.update_aliases(actions=alias_actions)
+            alias_switched = True
+
+            all_physical_indexes = list(
+                (
+                    await self.client.indices.get(
+                        index=f"{self.index_name}-*",
+                        allow_no_indices=True,
+                        ignore_unavailable=True,
+                    )
+                ).keys()
+            )
+            stale_indexes = [
+                index_name
+                for index_name in all_physical_indexes
+                if index_name != physical_index
+            ]
+            if stale_indexes:
+                await self.client.indices.delete(index=stale_indexes)
+        except Exception:
+            if (
+                not alias_switched
+                and await self.client.indices.exists(index=physical_index)
+            ):
+                await self.client.indices.delete(index=physical_index)
+            raise
 
     async def search(
         self, keyword: str, score_threshold: float = 0.6, limit: int = 20

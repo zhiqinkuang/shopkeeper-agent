@@ -36,7 +36,7 @@ embedding:
 es:
   host: ${oc.env:ES_HOST,localhost}
   port: ${oc.env:ES_PORT,9200}
-  index_name: ${oc.env:ES_INDEX_NAME,data_agent}
+  index_name: ${oc.env:ES_INDEX_NAME,value_index}
 
 llm:
   model_name: deepseek-v4-flash
